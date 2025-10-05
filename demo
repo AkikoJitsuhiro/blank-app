@@ -1,0 +1,71 @@
+import streamlit as st
+import cv2
+import numpy as np
+from skimage import color
+from PIL import Image
+
+# ==============================
+# 基準カラーチャート（例: 仮のLab値）
+# 実際にはチャート画像から抽出して登録するのがベスト
+# ==============================
+reference_colors = {
+    "-":   (90, 0, 0),
+    "+":   (80, 5, 10),
+    "++":  (70, 15, 20),
+    "+++": (60, 25, 30),
+    "++++":(50, 35, 40)
+}
+
+# ==============================
+# ΔE計算関数
+# ==============================
+def judge_color(mean_color):
+    sample = np.array([[mean_color]])
+    results = {}
+    for label, ref in reference_colors.items():
+        ref_arr = np.array([[ref]])
+        deltaE = color.deltaE_ciede2000(sample, ref_arr)[0][0]
+        results[label] = deltaE
+    best_match = min(results, key=results.get)
+    return best_match, results
+
+# ==============================
+# Streamlit UI
+# ==============================
+st.title("📊 お口の健康チェック 自動判定デモ")
+
+uploaded_file = st.file_uploader("試験紙の写真をアップロードしてください", type=["jpg","jpeg","png"])
+
+if uploaded_file is not None:
+    # 画像読み込み
+    image = Image.open(uploaded_file).convert("RGB")
+    img = np.array(image)
+    st.image(img, caption="アップロード画像", use_column_width=True)
+
+    # 前処理（縮小 & グレースケール）
+    img_resized = cv2.resize(img, (800, int(img.shape[0]*800/img.shape[1])))
+    gray = cv2.cvtColor(img_resized, cv2.COLOR_RGB2GRAY)
+    _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY+cv2.THRESH_OTSU)
+
+    # 輪郭検出 → 最大領域をROIとする
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    contours = sorted(contours, key=cv2.contourArea, reverse=True)
+
+    if contours:
+        x,y,w,h = cv2.boundingRect(contours[0])
+        roi = img_resized[y:y+h, x:x+w]
+
+        # ROIの平均色（Lab）
+        lab_roi = cv2.cvtColor(roi, cv2.COLOR_RGB2LAB)
+        mean_color = cv2.mean(lab_roi)[:3]
+
+        # 判定
+        best_match, results = judge_color(mean_color)
+
+        st.subheader("判定結果")
+        st.write(f"👉 判定: **{best_match}**")
+        st.write("ΔE 距離:", results)
+
+        st.image(roi, caption="抽出された試験紙領域", use_column_width=False)
+    else:
+        st.warning("試験紙領域を検出できませんでした。背景がシンプルな写真で再度お試しください。")
